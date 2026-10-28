@@ -46,6 +46,14 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
+    const repoNavBtn = document.getElementById('repoNavBtn');
+    if (repoNavBtn) {
+        repoNavBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            window.location.href = '/';
+        });
+    }
+
     async function loadDocumentsTable() {
         if (!documentsTableBody) return;
         try {

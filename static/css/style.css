@@ -117,6 +117,7 @@ body.app-body {
     display: flex;
     align-items: center;
     gap: 0.75rem;
+    text-decoration: none;
 }
 
 .brand-icon {
@@ -879,6 +880,20 @@ body.app-body {
 .btn-outline:hover {
     background-color: var(--bg-subtle);
     color: var(--text-primary);
+}
+
+.btn-outline.active,
+.repo-nav-btn.active {
+    background-color: var(--accent-light);
+    color: var(--accent-primary);
+    border-color: var(--accent-primary);
+    font-weight: 600;
+}
+
+.btn-outline.active:hover,
+.repo-nav-btn.active:hover {
+    background-color: var(--bg-subtle);
+    border-color: var(--accent-primary);
 }
 
 .btn-sm {

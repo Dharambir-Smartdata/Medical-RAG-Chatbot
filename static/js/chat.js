@@ -274,6 +274,17 @@ document.addEventListener('DOMContentLoaded', () => {
         sidebarBackdrop.addEventListener('click', closeSidebar);
     }
 
+    // Records Repository Button Navigation Toggle
+    const repoNavBtn = document.getElementById('repoNavBtn');
+    if (repoNavBtn) {
+        repoNavBtn.addEventListener('click', (e) => {
+            if (window.location.pathname.includes('/documents/')) {
+                e.preventDefault();
+                window.location.href = '/';
+            }
+        });
+    }
+
     window.addEventListener('resize', () => {
         if (!isMobileView()) {
             if (appSidebar) appSidebar.classList.remove('open');
@@ -342,6 +353,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function createNewSession() {
+        if (window.location.pathname.includes('/documents/')) {
+            window.location.href = '/';
+            return;
+        }
         try {
             const res = await fetch('/chat/new/', {
                 method: 'POST',
@@ -370,6 +385,10 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     async function switchSession(sessionId, title) {
+        if (window.location.pathname.includes('/documents/')) {
+            window.location.href = '/';
+            return;
+        }
         currentSessionId = sessionId;
         if (activeSessionTitle) activeSessionTitle.textContent = title;
         if (isMobileView()) closeSidebar();
