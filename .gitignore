@@ -20,9 +20,6 @@ db.sqlite3
 *.sqlite3
 qdrant_storage/
 
-# Uploaded media (keep dummy pdfs if wanted or exclude user data)
-media/medical_pdfs/test_*.pdf
-
 # Logs
 *.log
 scratch/

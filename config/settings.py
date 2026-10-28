@@ -104,6 +104,7 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 # Media files (PDF uploads)
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+os.makedirs(MEDIA_ROOT / 'medical_pdfs', exist_ok=True)
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
