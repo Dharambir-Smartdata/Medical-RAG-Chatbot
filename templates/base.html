@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Medical AI Assistant — Hybrid RAG{% endblock %}</title>
+    <meta name="description" content="Intelligent Medical Document Assistant with Hybrid RAG, Cross-Encoder Reranking, and Gemini LLM.">
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@500;600;700&display=swap" rel="stylesheet">
+    <script>
+        (function() {
+            const savedTheme = localStorage.getItem('medassist_theme') || 
+                (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-theme', savedTheme);
+        })();
+    </script>
+    <link rel="stylesheet" href="/static/css/style.css">
+    {% csrf_token %}
+</head>
+<body class="app-body">
+    <div class="app-container">
+        <!-- Sidebar Navigation -->
+        <aside class="app-sidebar" id="appSidebar">
+            <div class="sidebar-header">
+                <div class="brand">
+                    <div class="brand-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M12 2v20M2 12h20M7 7l10 10M17 7L7 17"/>
+                        </svg>
+                    </div>
+                    <div class="brand-text">
+                        <h1 class="brand-title">MedAssist AI</h1>
+                        <span class="brand-subtitle">Hybrid RAG System</span>
+                    </div>
+                </div>
+                <button class="icon-btn sidebar-close-btn" id="sidebarCloseBtn" aria-label="Close Sidebar">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+
+            <div class="sidebar-actions">
+                <button class="btn btn-primary btn-block" id="newChatBtn">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    <span>New Consultation</span>
+                </button>
+            </div>
+
+            <!-- Chat History -->
+            <div class="sidebar-section">
+                <div class="section-header">
+                    <span class="section-title">Consultations</span>
+                </div>
+                <div class="session-list" id="sessionList">
+                    <div class="session-loading">Loading sessions...</div>
+                </div>
+            </div>
+
+            <!-- Documents Section -->
+            <div class="sidebar-section documents-section">
+                <div class="section-header">
+                    <span class="section-title">Medical Records</span>
+                    <span class="badge" id="docCountBadge">0</span>
+                </div>
+                <div class="doc-list" id="sidebarDocList">
+                    <div class="doc-empty">No documents uploaded</div>
+                </div>
+                <button class="btn btn-secondary btn-block btn-sm" id="openUploadModalBtn">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                    <span>Upload Medical PDFs</span>
+                </button>
+            </div>
+
+            <!-- Footer / Disclaimers -->
+            <div class="sidebar-footer">
+                <div class="safety-indicator">
+                    <span class="dot-indicator"></span>
+                    <span>Guardrails Active • Non-Diagnostic</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Sidebar Mobile / Drawer Backdrop Overlay -->
+        <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+        <!-- Main Content Area -->
+        <main class="app-main">
+            <!-- Top App Bar -->
+            <header class="app-topbar">
+                <div class="topbar-left">
+                    <button class="icon-btn mobile-menu-btn" id="sidebarToggleBtn" aria-label="Toggle Menu">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
+                    </button>
+                    <div class="active-session-info">
+                        <h2 class="active-session-title" id="activeSessionTitle">Medical Consultation</h2>
+                        <span class="active-session-meta" id="activeSessionMeta">Grounded in uploaded records</span>
+                    </div>
+                </div>
+
+                <div class="topbar-right">
+                    <!-- Scope Filter Selector -->
+                    <div class="scope-selector-container">
+                        <label for="docScopeSelect" class="sr-only">Scope</label>
+                        <select id="docScopeSelect" class="scope-select">
+                            <option value="all">Query Scope: All Uploaded Records</option>
+                        </select>
+                    </div>
+
+                    <!-- Dark / Light Mode Switch -->
+                    <button class="theme-toggle-btn" id="themeToggleBtn" type="button" aria-label="Toggle Dark/Light Mode" title="Toggle Theme">
+                        <svg class="theme-icon-light" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <circle cx="12" cy="12" r="5"></circle>
+                            <line x1="12" y1="1" x2="12" y2="3"></line>
+                            <line x1="12" y1="21" x2="12" y2="23"></line>
+                            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line>
+                            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line>
+                            <line x1="1" y1="12" x2="3" y2="12"></line>
+                            <line x1="21" y1="12" x2="23" y2="12"></line>
+                            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line>
+                            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line>
+                        </svg>
+                        <svg class="theme-icon-dark" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
+                        </svg>
+                        <span class="theme-label" id="themeLabel">Dark Mode</span>
+                    </button>
+
+                    <a href="/documents/manage/" class="btn btn-outline btn-sm" title="Manage Documents">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                        <span>Records Repository</span>
+                    </a>
+                </div>
+            </header>
+
+            <!-- Page Content Block -->
+            <div class="content-viewport">
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    </div>
+
+    <!-- Upload Modal -->
+    <div class="modal-overlay" id="uploadModal" style="display: none;">
+        <div class="modal-card">
+            <div class="modal-header">
+                <div>
+                    <h3 class="modal-title">Upload Medical Documents</h3>
+                    <p class="modal-subtitle">Upload clinical notes, lab results, discharge summaries, or prescriptions (PDF format).</p>
+                </div>
+                <button class="icon-btn modal-close-btn" id="closeUploadModalBtn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+            <div class="modal-body">
+                <div class="dropzone" id="pdfDropzone">
+                    <div class="dropzone-icon">
+                        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
+                    </div>
+                    <p class="dropzone-text"><strong>Click to select</strong> or drag and drop medical PDF files here</p>
+                    <span class="dropzone-hint">Supports multiple files • Up to 20 MB per file</span>
+                    <input type="file" id="pdfFileInput" multiple accept=".pdf,application/pdf" style="display: none;">
+                </div>
+
+                <div class="upload-file-list" id="uploadFileList"></div>
+                <div class="upload-progress-container" id="uploadProgressContainer" style="display: none;">
+                    <div class="progress-bar-wrapper">
+                        <div class="progress-bar-fill" id="uploadProgressBar"></div>
+                    </div>
+                    <span class="progress-status-text" id="uploadStatusText">Processing document ingestion...</span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" id="cancelUploadBtn">Cancel</button>
+                <button class="btn btn-primary" id="startUploadBtn" disabled>Upload & Process</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Citation Inspection Drawer / Modal -->
+    <div class="drawer-overlay" id="citationDrawer" style="display: none;">
+        <div class="drawer-panel">
+            <div class="drawer-header">
+                <div class="drawer-header-info">
+                    <span class="drawer-badge" id="citationSourceBadge">[S1]</span>
+                    <h3 class="drawer-title" id="citationDocTitle">Document Name</h3>
+                </div>
+                <button class="icon-btn" id="closeCitationDrawerBtn">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+            <div class="drawer-body">
+                <div class="citation-meta-grid">
+                    <div class="meta-item">
+                        <span class="meta-label">PDF Page</span>
+                        <strong class="meta-value" id="citationPageNum">Page 1</strong>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Clinical Section</span>
+                        <strong class="meta-value" id="citationSection">General</strong>
+                    </div>
+                    <div class="meta-item">
+                        <span class="meta-label">Chunk Reference</span>
+                        <strong class="meta-value" id="citationChunkId">chunk_001</strong>
+                    </div>
+                </div>
+
+                <div class="citation-content-box">
+                    <span class="box-title">Grounded Source Passage</span>
+                    <div class="citation-highlighted-text" id="citationFullText">
+                        Excerpt text appears here.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Transformer Neural Model Loader Overlay -->
+    <div class="model-loader-overlay" id="modelLoaderOverlay">
+        <div class="model-loader-card">
+            <div class="model-loader-pulse-container">
+                <div class="pulse-ring"></div>
+                <div class="pulse-ring pulse-delay"></div>
+                <div class="model-loader-icon">
+                    <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2v20M2 12h20M7 7l10 10M17 7L7 17"/>
+                    </svg>
+                </div>
+            </div>
+            
+            <h3 class="model-loader-title">Loading Medical AI Models</h3>
+            <p class="model-loader-subtitle" id="modelLoaderStatus">
+                Initializing Transformer Embeddings & Cross-Encoder Reranker...
+            </p>
+
+            <div class="model-loader-track">
+                <div class="model-loader-fill" id="modelLoaderBar"></div>
+            </div>
+
+            <div class="model-loader-indicators">
+                <div class="loader-indicator active" id="stepEmbeddings">
+                    <span class="ind-icon">✓</span>
+                    <span class="ind-text">Sentence Transformer (MiniLM-L6-v2)</span>
+                </div>
+                <div class="loader-indicator" id="stepReranker">
+                    <span class="ind-icon">✓</span>
+                    <span class="ind-text">Cross-Encoder (ms-marco-MiniLM)</span>
+                </div>
+                <div class="loader-indicator" id="stepReady">
+                    <span class="ind-icon">✓</span>
+                    <span class="ind-text">Neural Pipeline Verified</span>
+                </div>
+            </div>
+
+            <div class="loader-footer-note">
+                Downloaded weights are cached locally for instantaneous subsequent sessions.
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/static/js/chat.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

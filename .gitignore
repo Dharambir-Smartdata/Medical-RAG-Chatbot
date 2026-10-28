@@ -1,0 +1,28 @@
+# Environment variables & secrets
+.env
+*.env
+
+# Python Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Databases & local storage
+db.sqlite3
+*.sqlite3
+qdrant_storage/
+
+# Uploaded media (keep dummy pdfs if wanted or exclude user data)
+media/medical_pdfs/test_*.pdf
+
+# Logs
+*.log
+scratch/
