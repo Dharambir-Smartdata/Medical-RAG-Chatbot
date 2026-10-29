@@ -105,9 +105,18 @@ STRICT RULES:
 14. NO EXTERNAL SEARCH
     Do not use internet search, external APIs, or outside knowledge to answer questions.
 
-15. RESPONSE FORMAT
-    Provide concise, accurate, evidence-based answers. Use clean bullet points and bold headings for clarity.
-    Include citations wherever supported.
+15. RESPONSE FORMAT AND STYLE (BULLET POINTS VS. SENTENCES):
+    Provide concise, accurate, evidence-based answers.
+    a) USER FORMAT REQUEST OVERRIDE:
+       If the user asks for a specific format — such as "in a sentence", "in one sentence", "in 2 sentences", "in a paragraph", "as a summary", "in plain text", or "in bullet points" — you MUST strictly follow their requested format.
+       - If asked for a sentence or single sentence (e.g., "provide me the above response in a sentence", "summarize in a sentence"): Output a clear, single sentence without bullet points, numbered lists, or bold headings.
+       - If asked for a paragraph: Output natural sentences in a paragraph without bullet points.
+       - If asked for bullet points or lists: Format cleanly using bullet points.
+    b) DEFAULT FORMATTING (WHEN NO FORMAT IS REQUESTED):
+       - Multi-item clinical results (multiple lab findings, multiple medications, distinct symptoms, or comprehensive summaries): Use clean bullet points and bold headings for clarity.
+       - Single-fact questions or simple direct answers (e.g., "What was the blood pressure?"): Use a concise, direct sentence.
+    c) CITATIONS:
+       Always embed source identifiers (e.g. [S1], [S2]) immediately after each factual statement, regardless of whether you are answering in sentences or bullet points.
     If evidence is insufficient, refuse to answer rather than guessing.
 
 16. QUESTION SPECIFICITY AND ANSWER RELEVANCE
@@ -179,11 +188,20 @@ class GeminiService:
         self,
         user_question: str,
         retrieved_context: str,
-        source_metadata: str
+        source_metadata: str,
+        conversation_history: Optional[str] = None
     ) -> str:
-        """Constructs prompt incorporating retrieved context, source references, and question."""
-        prompt = f"""{SYSTEM_PROMPT}
+        """Constructs prompt incorporating retrieved context, source references, conversation history, and question."""
+        history_section = ""
+        if conversation_history and conversation_history.strip():
+            history_section = f"""
+CONVERSATION HISTORY:
+The following is the recent conversation between the user and you (the assistant) in this consultation. Use it to understand references to previous responses (such as "the above response", "summary of it", or follow-up questions).
+{conversation_history.strip()}
+"""
 
+        prompt = f"""{SYSTEM_PROMPT}
+{history_section}
 SOURCE REFERENCES:
 {source_metadata}
 
@@ -194,10 +212,16 @@ USER QUESTION:
 {user_question}
 
 INSTRUCTIONS FOR YOUR RESPONSE:
-1. Address ONLY the specific question asked. Do NOT dump unrelated laboratory tests, medications, or findings that were not requested.
-2. Address EVERY requested part of the user's question completely (for example, if asked for both a test value and how it was flagged or interpreted in the report, provide both).
-3. If any requested item or detail is missing from the retrieved context, explicitly state that it was not found in the uploaded documents.
-4. Embed source identifiers like [S1] or [S2] immediately after each factual statement.
+1. FORMATTING & STYLE:
+   - If the user specifies or asks for a specific format (e.g. "in a sentence", "in one sentence", "in a paragraph", "in bullet points", "summarize in a sentence"), you MUST strictly honor that requested format.
+   - If the user asks for a sentence or single sentence (e.g., "provide me the above response in a sentence", "summarize in a sentence"), write a clear, coherent sentence (or sentences) WITHOUT markdown bullet points, list items, or bold headers.
+   - When no specific format is requested: use clean bullet points and bold headings for multi-item clinical findings/lists, and concise natural sentences for single direct questions.
+2. CONVERSATION CONTEXT & FOLLOW-UPS:
+   - If the question refers to earlier conversation (e.g., "the above response", "summary of it", "explain that further"), use the conversation history and retrieved context to formulate your response while preserving the relevant document citations like [S1].
+3. Address ONLY the specific question asked. Do NOT dump unrelated laboratory tests, medications, or findings that were not requested.
+4. Address EVERY requested part of the user's question completely (for example, if asked for both a test value and how it was flagged or interpreted in the report, provide both).
+5. If any requested item or detail is missing from the retrieved context, explicitly state that it was not found in the uploaded documents.
+6. Embed source identifiers like [S1] or [S2] immediately after each factual statement.
 """
         return prompt
 
@@ -315,7 +339,8 @@ INSTRUCTIONS FOR YOUR RESPONSE:
         self,
         user_question: str,
         retrieved_context: str,
-        source_metadata: str
+        source_metadata: str,
+        conversation_history: Optional[str] = None
     ) -> str:
         """
         Calls Gemini API with the context-grounded prompt.
@@ -331,7 +356,12 @@ INSTRUCTIONS FOR YOUR RESPONSE:
                 status_code=401
             )
 
-        prompt = self.build_prompt(user_question, retrieved_context, source_metadata)
+        prompt = self.build_prompt(
+            user_question,
+            retrieved_context,
+            source_metadata,
+            conversation_history=conversation_history
+        )
         max_retries = 2
         last_error = None
 

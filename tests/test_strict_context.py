@@ -285,3 +285,37 @@ class TestStrictPDFContextAnswering(TestCase):
         # Verify unrelated findings are NOT included
         self.assertNotIn("Total cholesterol", ans)
         self.assertNotIn("Creatinine", ans)
+
+    @patch.object(GeminiService, 'generate_answer')
+    def test_12_follow_up_summarize_in_a_sentence(self, mock_gen):
+        """Test 12: Follow-up question requesting 'in a sentence' uses conversation history and succeeds."""
+        # Turn 1: Initial query
+        mock_gen.return_value = "- **Vitamin D3**: 1000 IU daily [S1]\n- **Cetirizine**: 10 mg as needed [S1]"
+        resp1 = self.orchestrator.answer_question(
+            question="What medications is the patient taking?",
+            session=self.session_a,
+            user=self.user_a,
+            document_id=str(self.doc_a3.id)
+        )
+        self.assertEqual(resp1["status"], "success")
+
+        # Turn 2: Follow-up query asking for a sentence summary
+        mock_gen.return_value = "The patient takes Vitamin D3 daily and Cetirizine as needed for symptoms [S1]."
+        resp2 = self.orchestrator.answer_question(
+            question="provide me the above response in a sentence",
+            session=self.session_a,
+            user=self.user_a,
+            document_id=str(self.doc_a3.id)
+        )
+
+        self.assertEqual(resp2["status"], "success")
+        self.assertNotIn("could not find sufficient information", resp2["answer"].lower())
+        self.assertIn("Vitamin D3", resp2["answer"])
+        self.assertGreater(len(resp2["citations"]), 0)
+        self.assertEqual(resp2["citations"][0]["document_name"], "medication_record_alice.pdf")
+
+        # Verify conversation history was passed to GeminiService
+        _, kwargs = mock_gen.call_args
+        self.assertIn("conversation_history", kwargs)
+        self.assertIn("What medications is the patient taking?", kwargs["conversation_history"])
+

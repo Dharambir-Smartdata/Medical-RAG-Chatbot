@@ -16,7 +16,8 @@ from services.guardrails_service import (
     OUT_OF_CONTEXT_MESSAGE,
     INSUFFICIENT_INFO_MESSAGE,
     NO_DOCUMENTS_MESSAGE,
-    is_out_of_scope_query
+    is_out_of_scope_query,
+    is_conversational_follow_up
 )
 from services.hybrid_retrieval_service import HybridRetrievalService
 from services.reranking_service import RerankingService
@@ -83,7 +84,24 @@ class ChatRAGOrchestrator:
             if target_doc:
                 target_doc_id = str(target_doc.id)
 
-        # 3. Retrieve corpus chunks for BM25 sparse search strictly from current user's documents
+        # 3. Check Conversation History & Follow-Up Context
+        past_messages = list(session.messages.order_by('created_at'))
+        is_follow_up = bool(past_messages) and is_conversational_follow_up(question)
+
+        last_user_msg = next((m for m in reversed(past_messages) if m.role == 'user'), None)
+        last_assistant_msg = next((m for m in reversed(past_messages) if m.role == 'assistant'), None)
+
+        conversation_history_str = ""
+        if past_messages:
+            history_lines = []
+            for msg in past_messages[-6:]:
+                role_label = "User" if msg.role == 'user' else "Assistant"
+                history_lines.append(f"{role_label}: {msg.message.strip()}")
+            conversation_history_str = "\n".join(history_lines)
+
+        search_query = f"{last_user_msg.message} {question}" if (is_follow_up and last_user_msg) else question
+
+        # Retrieve corpus chunks for BM25 sparse search strictly from current user's documents
         chunks_qs = DocumentChunk.objects.filter(document__in=docs_qs)
         if target_doc_id:
             chunks_qs = chunks_qs.filter(document_id=target_doc_id)
@@ -102,14 +120,28 @@ class ChatRAGOrchestrator:
 
         # 4. Hybrid Retrieval (Dense Qdrant + Sparse BM25 + RRF)
         fused_candidates = self.hybrid_retriever.retrieve(
-            query=question,
+            query=search_query,
             corpus_chunks=corpus_chunks,
             document_id=target_doc_id,
             fusion_limit=15
         )
 
+        # If follow-up, ensure any chunks previously cited in last assistant message are present
+        if is_follow_up and last_assistant_msg and last_assistant_msg.citations:
+            prior_chunk_ids = {c.get("chunk_id") for c in last_assistant_msg.citations if c.get("chunk_id")}
+            prior_doc_pages = {(c.get("document_name"), c.get("page_number")) for c in last_assistant_msg.citations}
+            existing_ids = {c.get("chunk_id") for c in fused_candidates}
+            matching_prior = [
+                c for c in corpus_chunks
+                if (c.get("chunk_id") in prior_chunk_ids or 
+                    (c.get("document_name"), c.get("page_number")) in prior_doc_pages)
+                and c.get("chunk_id") not in existing_ids
+            ]
+            if matching_prior:
+                fused_candidates = matching_prior + fused_candidates
+
         # 5. Question Relevance & Context Sufficiency Check (Pre-Rerank)
-        if not GuardrailsService.check_context_sufficiency(fused_candidates, user_question=question):
+        if not GuardrailsService.check_context_sufficiency(fused_candidates, user_question=question, is_follow_up=is_follow_up):
             if is_out_of_scope_query(question):
                 insufficient_msg = OUT_OF_CONTEXT_MESSAGE
                 refusal_status = "out_of_scope"
@@ -127,7 +159,7 @@ class ChatRAGOrchestrator:
 
         # 6. Cross-Encoder Reranking & Score Threshold Validation
         top_chunks = self.reranker.rerank(
-            query=question,
+            query=search_query if is_follow_up else question,
             candidates=fused_candidates,
             top_k=6
         )
@@ -135,7 +167,7 @@ class ChatRAGOrchestrator:
         threshold = getattr(settings, 'RERANK_SCORE_THRESHOLD', -8.5)
         top_score = top_chunks[0].get('rerank_score', -99) if top_chunks else -99
 
-        if top_score < threshold:
+        if top_score < threshold and not is_follow_up:
             logger.info(f"Top rerank score {top_score:.4f} is below threshold {threshold} for query '{question}'")
             if is_out_of_scope_query(question):
                 refusal_msg = OUT_OF_CONTEXT_MESSAGE
@@ -174,12 +206,20 @@ class ChatRAGOrchestrator:
         # 8. Prepare Citation Identifiers and Structured Context
         context_str, metadata_str, source_map = CitationService.prepare_citations_context(filtered_chunks)
 
+        # Merge citations from previous assistant turn if follow-up
+        if is_follow_up and last_assistant_msg and last_assistant_msg.citations:
+            for cit in last_assistant_msg.citations:
+                sid = cit.get("source_id")
+                if sid and sid not in source_map:
+                    source_map[sid] = cit
+
         # 9. Call Gemini API
         try:
             raw_answer = self.gemini_service.generate_answer(
                 user_question=question,
                 retrieved_context=context_str,
-                source_metadata=metadata_str
+                source_metadata=metadata_str,
+                conversation_history=conversation_history_str
             )
         except GeminiServiceException as e:
             logger.warning(f"Gemini API failure [{e.error_type}]: {e.user_message}")
@@ -226,6 +266,10 @@ class ChatRAGOrchestrator:
             answer_text=guarded_answer,
             source_map=source_map
         )
+
+        # If follow-up reformatting produced an answer without explicit brackets, retain prior citations
+        if is_follow_up and not verified_citations and last_assistant_msg and last_assistant_msg.citations:
+            verified_citations = list(last_assistant_msg.citations)
 
         # Persist Messages to Database
         ChatMessage.objects.create(session=session, role='user', message=question)

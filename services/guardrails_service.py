@@ -80,8 +80,33 @@ COMMON_STOPWORDS = {
     'first', 'second', 'third', 'last', 'one', 'two', 'three', 'tell', 'show', 'give', 'please',
     'find', 'list', 'mention', 'mentioned', 'state', 'stated', 'report', 'reported', 'document',
     'documents', 'pdf', 'pdfs', 'record', 'records', 'file', 'files', 'patient', 'person',
-    'information', 'detail', 'details', 'value', 'values', 'result', 'results', 'data', 'provide'
+    'information', 'detail', 'details', 'value', 'values', 'result', 'results', 'data', 'provide',
+    # Formatting and conversational meta-words
+    'sentence', 'sentences', 'summary', 'summarize', 'summarise', 'rephrase', 'rewrite',
+    'shorten', 'condense', 'point', 'points', 'bullet', 'bullets', 'paragraph', 'paragraphs',
+    'response', 'responses', 'answer', 'answers', 'explanation', 'whatever', 'provided',
+    'say', 'said', 'earlier', 'prior', 'preceding', 'above'
 }
+
+FOLLOW_UP_PATTERNS = [
+    r'\b(?:the\s+)?(?:above|previous|prior|earlier|last|preceding)\s+(?:response|answer|message|summary|points?|information|result|data)\b',
+    r'\b(?:what(?:ever)?\s+(?:you\s+)?(?:have\s+)?(?:provided|said|wrote|mentioned|given))\b',
+    r'\b(?:summarize|summarise|shorten|rephrase|rewrite|condense|simplify)\s+(?:it|this|that|the\s+above|your\s+answer|your\s+response)?\b',
+    r'\b(?:in\s+a\s+sentence|in\s+one\s+sentence|in\s+\d+\s+sentences?|in\s+a\s+short\s+sentence|in\s+a\s+paragraph|in\s+bullet\s+points?|as\s+bullet\s+points?)\b',
+    r'\b(?:provide|give|tell)\s+(?:me\s+)?(?:the\s+above|that|it)\s+(?:in|as)\b',
+    r'\b(?:explain|clarify)\s+(?:the\s+)?(?:above|first|second|third|last|previous)\s+(?:point|item|one|result)\b',
+    r'\b(?:what\s+about\s+(?:it|that|this))\b',
+    r'\b(?:can\s+you\s+(?:summarize|shorten|rephrase|simplify))\b',
+]
+
+
+def is_conversational_follow_up(question: str) -> bool:
+    """Detects whether user question is a follow-up or meta-request referencing previous responses."""
+    cleaned = question.strip().lower()
+    for pattern in FOLLOW_UP_PATTERNS:
+        if re.search(pattern, cleaned):
+            return True
+    return False
 
 OUT_OF_SCOPE_PATTERNS = [
     # Programming, coding, scripts, data science
@@ -171,7 +196,12 @@ class GuardrailsService:
         return [w for w in words if not w.isdigit() and w not in COMMON_STOPWORDS]
 
     @classmethod
-    def check_context_sufficiency(cls, retrieved_chunks: list, user_question: str = "") -> bool:
+    def check_context_sufficiency(
+        cls,
+        retrieved_chunks: list,
+        user_question: str = "",
+        is_follow_up: bool = False
+    ) -> bool:
         """
         Checks whether retrieved context is available, meaningful,
         and relevant to the user question.
@@ -183,6 +213,11 @@ class GuardrailsService:
         combined_text = "".join(c.get("chunk_text", "") for c in retrieved_chunks).strip()
         if len(combined_text) < 20:
             return False
+
+        # For conversational follow-ups referring to prior conversation/answers,
+        # the question language is formatting/meta instruction, so bypass single-turn lexical overlap.
+        if is_follow_up:
+            return True
 
         # Verify lexical/conceptual relevance between query and retrieved chunks
         if user_question:
