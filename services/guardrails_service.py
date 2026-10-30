@@ -258,8 +258,12 @@ class GuardrailsService:
 
         # Check if insufficient context was acknowledged
         insufficient_markers = [
+            "could not find sufficient information",
+            "sufficient information",
             "do not contain sufficient information",
             "does not contain sufficient information",
+            "do not contain information",
+            "does not contain information",
             "insufficient information",
             "not mentioned in the uploaded documents",
             "not found in the uploaded documents",

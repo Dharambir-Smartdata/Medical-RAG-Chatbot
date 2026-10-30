@@ -75,6 +75,13 @@ def submit_question(request):
             session_name="New Medical Consultation"
         )
 
+    edit_message_id = data.get('edit_message_id')
+    if edit_message_id and session:
+        target_msg = session.messages.filter(id=edit_message_id).first()
+        if target_msg:
+            # Delete the edited message and any subsequent messages in this session
+            session.messages.filter(created_at__gte=target_msg.created_at).delete()
+
     # Run Cached RAG Orchestrator
     orchestrator = get_orchestrator()
     user = request.user if request.user.is_authenticated else None
@@ -85,6 +92,9 @@ def submit_question(request):
         document_id=document_id
     )
 
+    user_msg = session.messages.filter(role='user').last()
+    asst_msg = session.messages.filter(role='assistant').last()
+
     return JsonResponse({
         "session_id": str(session.id),
         "session_name": session.session_name,
@@ -92,7 +102,9 @@ def submit_question(request):
         "citations": result.get("citations", []),
         "status": result.get("status", "success"),
         "error_type": result.get("error_type", None),
-        "retryable": result.get("retryable", False)
+        "retryable": result.get("retryable", False),
+        "user_message_id": user_msg.id if user_msg else None,
+        "assistant_message_id": asst_msg.id if asst_msg else None
     })
 
 

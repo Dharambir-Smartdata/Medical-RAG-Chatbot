@@ -24,6 +24,10 @@ document.addEventListener('DOMContentLoaded', () => {
     // Topbar & Sidebar
     const activeSessionTitle = document.getElementById('activeSessionTitle');
     const docScopeSelect = document.getElementById('docScopeSelect');
+    const customScopeDropdown = document.getElementById('customScopeDropdown');
+    const customScopeTrigger = document.getElementById('customScopeTrigger');
+    const customScopeLabel = document.getElementById('customScopeLabel');
+    const customScopeMenu = document.getElementById('customScopeMenu');
     const sessionList = document.getElementById('sessionList');
     const sidebarDocList = document.getElementById('sidebarDocList');
     const docCountBadge = document.getElementById('docCountBadge');
@@ -44,6 +48,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const uploadProgressContainer = document.getElementById('uploadProgressContainer');
     const uploadProgressBar = document.getElementById('uploadProgressBar');
     const uploadStatusText = document.getElementById('uploadStatusText');
+
+    // Delete Confirmation Modal
+    const deleteConfirmModal = document.getElementById('deleteConfirmModal');
+    const closeDeleteModalBtn = document.getElementById('closeDeleteModalBtn');
+    const cancelDeleteModalBtn = document.getElementById('cancelDeleteModalBtn');
+    const confirmDeleteModalBtn = document.getElementById('confirmDeleteModalBtn');
+    const deleteConfirmModalMessage = document.getElementById('deleteConfirmModalMessage');
+    let sessionPendingDeletion = null;
 
     // Citation Drawer
     const citationDrawer = document.getElementById('citationDrawer');
@@ -345,7 +357,7 @@ document.addEventListener('DOMContentLoaded', () => {
             const delBtn = div.querySelector('.session-del-btn');
             delBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                deleteSession(sess.id);
+                openDeleteConfirmModal(sess.id, sess.session_name);
             });
 
             sessionList.appendChild(div);
@@ -408,8 +420,57 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     }
 
-    async function deleteSession(sessionId) {
-        if (!confirm('Are you sure you want to delete this consultation history?')) return;
+    // ==========================================================================
+    // Delete Consultation Confirmation Modal UX
+    // ==========================================================================
+    function openDeleteConfirmModal(sessionId, sessionName = '') {
+        sessionPendingDeletion = sessionId;
+        if (deleteConfirmModalMessage) {
+            if (sessionName) {
+                deleteConfirmModalMessage.innerHTML = `Are you sure you want to delete <strong>"${escapeHtml(sessionName)}"</strong>?`;
+            } else {
+                deleteConfirmModalMessage.textContent = 'Are you sure you want to delete this consultation history?';
+            }
+        }
+        if (deleteConfirmModal) {
+            deleteConfirmModal.style.display = 'flex';
+        }
+    }
+
+    function closeDeleteConfirmModal() {
+        sessionPendingDeletion = null;
+        if (deleteConfirmModal) {
+            deleteConfirmModal.style.display = 'none';
+        }
+    }
+
+    if (closeDeleteModalBtn) closeDeleteModalBtn.addEventListener('click', closeDeleteConfirmModal);
+    if (cancelDeleteModalBtn) cancelDeleteModalBtn.addEventListener('click', closeDeleteConfirmModal);
+    if (deleteConfirmModal) {
+        deleteConfirmModal.addEventListener('click', (e) => {
+            if (e.target === deleteConfirmModal) closeDeleteConfirmModal();
+        });
+    }
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && deleteConfirmModal && deleteConfirmModal.style.display !== 'none') {
+            closeDeleteConfirmModal();
+        }
+    });
+
+    if (confirmDeleteModalBtn) {
+        confirmDeleteModalBtn.addEventListener('click', async () => {
+            if (!sessionPendingDeletion) return;
+            const targetId = sessionPendingDeletion;
+            closeDeleteConfirmModal();
+            await performDeleteSession(targetId);
+        });
+    }
+
+    function deleteSession(sessionId, sessionName = '') {
+        openDeleteConfirmModal(sessionId, sessionName);
+    }
+
+    async function performDeleteSession(sessionId) {
         try {
             const res = await fetch(`/chat/session/${sessionId}/delete/`, {
                 method: 'DELETE',
@@ -422,6 +483,8 @@ document.addEventListener('DOMContentLoaded', () => {
                 } else {
                     await loadSessions();
                 }
+            } else {
+                showToast('Failed to delete consultation', 'error');
             }
         } catch (err) {
             showToast('Failed to delete consultation', 'error');
@@ -470,11 +533,85 @@ document.addEventListener('DOMContentLoaded', () => {
                     docScopeSelect.appendChild(opt);
                 });
                 if (currentVal) docScopeSelect.value = currentVal;
+                syncCustomScopeDropdown();
             }
 
         } catch (err) {
             console.error('Documents load error:', err);
         }
+    }
+
+    // ==========================================================================
+    // Custom Scope Dropdown (Shows vertical scrollbar when items > 4)
+    // ==========================================================================
+    function syncCustomScopeDropdown() {
+        if (!docScopeSelect || !customScopeMenu || !customScopeLabel) return;
+
+        customScopeMenu.innerHTML = '';
+        const options = Array.from(docScopeSelect.options);
+
+        options.forEach((opt) => {
+            const item = document.createElement('div');
+            item.className = 'custom-scope-item' + (opt.value === docScopeSelect.value ? ' is-selected' : '');
+            item.setAttribute('role', 'option');
+            item.setAttribute('data-value', opt.value);
+            item.textContent = opt.textContent;
+
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                docScopeSelect.value = opt.value;
+                customScopeLabel.textContent = opt.textContent;
+
+                customScopeMenu.querySelectorAll('.custom-scope-item').forEach(el => el.classList.remove('is-selected'));
+                item.classList.add('is-selected');
+
+                if (customScopeDropdown) customScopeDropdown.classList.remove('is-open');
+                if (customScopeTrigger) customScopeTrigger.setAttribute('aria-expanded', 'false');
+
+                docScopeSelect.dispatchEvent(new Event('change', { bubbles: true }));
+            });
+
+            customScopeMenu.appendChild(item);
+        });
+
+        // Set active label based on current selection
+        const selectedOpt = docScopeSelect.options[docScopeSelect.selectedIndex] || options[0];
+        if (selectedOpt) {
+            customScopeLabel.textContent = selectedOpt.textContent;
+        }
+
+        // Add vertical scrollbar if list is more than 4 items
+        if (options.length > 4) {
+            customScopeMenu.classList.add('has-scroll');
+        } else {
+            customScopeMenu.classList.remove('has-scroll');
+        }
+    }
+
+    function initCustomScopeDropdown() {
+        if (!customScopeTrigger || !customScopeDropdown) return;
+
+        customScopeTrigger.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const isOpen = customScopeDropdown.classList.toggle('is-open');
+            customScopeTrigger.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!customScopeDropdown.contains(e.target)) {
+                customScopeDropdown.classList.remove('is-open');
+                customScopeTrigger.setAttribute('aria-expanded', 'false');
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && customScopeDropdown.classList.contains('is-open')) {
+                customScopeDropdown.classList.remove('is-open');
+                customScopeTrigger.setAttribute('aria-expanded', 'false');
+            }
+        });
+
+        syncCustomScopeDropdown();
     }
 
     // ==========================================================================
@@ -506,19 +643,155 @@ document.addEventListener('DOMContentLoaded', () => {
         if (loadingBubble) loadingBubble.style.display = 'none';
     }
 
-    function appendUserMessage(text) {
+    function appendUserMessage(text, messageId = null) {
         if (emptyChatState) emptyChatState.style.display = 'none';
         if (messageStream) messageStream.style.display = 'flex';
 
         const turn = document.createElement('div');
         turn.className = 'message-turn user-turn';
+        if (messageId) {
+            turn.setAttribute('data-message-id', messageId);
+        }
+
         turn.innerHTML = `
-            <div class="message-bubble">
-                <div class="user-text">${escapeHtml(text)}</div>
+            <div class="user-bubble-wrapper">
+                <div class="message-bubble">
+                    <div class="user-text">${escapeHtml(text)}</div>
+                    <div class="user-edit-container" style="display: none;">
+                        <textarea class="user-edit-textarea" rows="2" maxlength="2000"></textarea>
+                        <div class="user-edit-actions">
+                            <button type="button" class="btn-cancel-edit">Cancel</button>
+                            <button type="button" class="btn-send-edit">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                                    <line x1="22" y1="2" x2="11" y2="13"></line>
+                                    <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                                </svg>
+                                <span>Send</span>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <div class="user-turn-actions">
+                    <button type="button" class="btn-edit-query" title="Edit query" aria-label="Edit query">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                        </svg>
+                        <span>Edit</span>
+                    </button>
+                </div>
             </div>
         `;
+
+        const userTextEl = turn.querySelector('.user-text');
+        const editContainer = turn.querySelector('.user-edit-container');
+        const editTextarea = turn.querySelector('.user-edit-textarea');
+        const editBtn = turn.querySelector('.btn-edit-query');
+        const cancelBtn = turn.querySelector('.btn-cancel-edit');
+        const sendEditBtn = turn.querySelector('.btn-send-edit');
+        const userTurnActions = turn.querySelector('.user-turn-actions');
+
+        function autoResizeEditTextarea(el, maxHeight = 220) {
+            if (!el) return;
+            el.style.height = 'auto';
+            const computed = window.getComputedStyle(el);
+            const borderTop = parseFloat(computed.borderTopWidth) || 0;
+            const borderBottom = parseFloat(computed.borderBottomWidth) || 0;
+            const borderOffset = borderTop + borderBottom;
+            const targetHeight = el.scrollHeight + borderOffset;
+
+            if (targetHeight >= maxHeight) {
+                el.style.height = maxHeight + 'px';
+                el.style.overflowY = 'auto';
+            } else {
+                el.style.height = Math.max(targetHeight, 60) + 'px';
+                el.style.overflowY = 'hidden';
+            }
+        }
+
+        function openEditMode() {
+            if (isProcessing) return;
+            const bubble = turn.querySelector('.message-bubble');
+            const bubbleWrapper = turn.querySelector('.user-bubble-wrapper');
+
+            // Lock bubble width so it does not collapse or shrink
+            const origWidth = bubble ? bubble.offsetWidth : 0;
+            if (bubble && origWidth > 0) {
+                bubble.style.width = Math.max(origWidth, 380) + 'px';
+                bubble.style.maxWidth = '100%';
+            }
+            if (bubbleWrapper) {
+                bubbleWrapper.classList.add('is-editing');
+            }
+            if (bubble) {
+                bubble.classList.add('is-editing');
+            }
+            turn.classList.add('is-editing');
+
+            editTextarea.value = userTextEl.textContent.trim();
+            userTextEl.style.display = 'none';
+            editContainer.style.display = 'flex';
+            if (userTurnActions) userTurnActions.style.display = 'none';
+
+            // Auto adjust height to fit initial content up to maxHeight
+            autoResizeEditTextarea(editTextarea);
+
+            editTextarea.focus();
+            editTextarea.setSelectionRange(editTextarea.value.length, editTextarea.value.length);
+        }
+
+        function closeEditMode() {
+            editContainer.style.display = 'none';
+            userTextEl.style.display = 'block';
+            if (userTurnActions) userTurnActions.style.display = 'flex';
+
+            const bubble = turn.querySelector('.message-bubble');
+            const bubbleWrapper = turn.querySelector('.user-bubble-wrapper');
+            if (bubble) {
+                bubble.style.width = '';
+                bubble.style.maxWidth = '';
+                bubble.classList.remove('is-editing');
+            }
+            if (bubbleWrapper) {
+                bubbleWrapper.classList.remove('is-editing');
+            }
+            turn.classList.remove('is-editing');
+        }
+
+        editBtn.addEventListener('click', openEditMode);
+        cancelBtn.addEventListener('click', closeEditMode);
+
+        editTextarea.addEventListener('input', () => {
+            autoResizeEditTextarea(editTextarea);
+        });
+
+        editTextarea.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeEditMode();
+            } else if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                submitEditedQuery();
+            }
+        });
+
+        function submitEditedQuery() {
+            if (isProcessing) return;
+            const newQuery = editTextarea.value.trim();
+            if (!newQuery) {
+                showToast('Question cannot be empty', 'warning');
+                return;
+            }
+            closeEditMode();
+            userTextEl.textContent = newQuery;
+            const currentMsgId = turn.getAttribute('data-message-id');
+            sendEditedMessage(newQuery, currentMsgId, turn);
+        }
+
+        sendEditBtn.addEventListener('click', submitEditedQuery);
+
         messageStream.appendChild(turn);
         chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
+        return turn;
     }
 
     function getErrorBadgeLabel(errorType) {
@@ -653,11 +926,96 @@ document.addEventListener('DOMContentLoaded', () => {
 
         messages.forEach(msg => {
             if (msg.role === 'user') {
-                appendUserMessage(msg.message);
+                appendUserMessage(msg.message, msg.id);
             } else if (msg.role === 'assistant') {
                 appendAIMessage(msg.message, msg.citations);
             }
         });
+    }
+
+    async function sendEditedMessage(editedQuestion, editMessageId, userTurn) {
+        if (isProcessing) return;
+
+        // Remove all subsequent sibling message turns after this user turn from messageStream
+        let nextSibling = userTurn.nextElementSibling;
+        while (nextSibling) {
+            const toRemove = nextSibling;
+            nextSibling = nextSibling.nextElementSibling;
+            if (toRemove !== loadingBubble) {
+                toRemove.remove();
+            }
+        }
+
+        isProcessing = true;
+        sendBtn.disabled = true;
+        startLoadingAnimation();
+
+        const documentId = docScopeSelect ? docScopeSelect.value : 'all';
+
+        try {
+            const payload = {
+                question: editedQuestion,
+                session_id: currentSessionId,
+                document_id: documentId
+            };
+            if (editMessageId) {
+                payload.edit_message_id = editMessageId;
+            }
+
+            const res = await fetch('/chat/', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrftoken
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await res.json();
+            stopLoadingAnimation();
+
+            if (data.session_id && data.session_id !== currentSessionId) {
+                currentSessionId = data.session_id;
+                if (activeSessionTitle && data.session_name) {
+                    activeSessionTitle.textContent = data.session_name;
+                }
+                loadSessions();
+            }
+
+            if (data.user_message_id) {
+                userTurn.setAttribute('data-message-id', data.user_message_id);
+            }
+
+            if (data.status === 'llm_error') {
+                appendAIErrorMessage(data.answer, data.error_type, data.retryable, editedQuestion);
+                showToast(getErrorBadgeLabel(data.error_type), 'error');
+            } else if (data.status === 'no_documents') {
+                appendAIMessage(data.answer, []);
+                showToast('Please upload a PDF document first', 'error');
+            } else if (data.status === 'insufficient_context') {
+                appendAIMessage(data.answer, []);
+                showToast('Information not found in documents', 'info');
+            } else if (data.status === 'out_of_scope') {
+                appendAIMessage(data.answer, []);
+                showToast('Question outside document scope', 'info');
+            } else {
+                appendAIMessage(data.answer, data.citations || []);
+            }
+
+        } catch (err) {
+            stopLoadingAnimation();
+            appendAIErrorMessage(
+                "Unable to connect to the AI service. Please check your connection and try again.",
+                "network_error",
+                true,
+                editedQuestion
+            );
+            showToast('Connection failed', 'error');
+        } finally {
+            isProcessing = false;
+            sendBtn.disabled = questionInput.value.trim().length === 0;
+            questionInput.focus();
+        }
     }
 
     async function handleSendMessage() {
@@ -671,7 +1029,7 @@ document.addEventListener('DOMContentLoaded', () => {
         questionInput.value = '';
         autoResizeTextarea();
 
-        appendUserMessage(submittedQuestion);
+        const userTurn = appendUserMessage(submittedQuestion);
         isProcessing = true;
         sendBtn.disabled = true;
         startLoadingAnimation();
@@ -701,6 +1059,10 @@ document.addEventListener('DOMContentLoaded', () => {
                     activeSessionTitle.textContent = data.session_name;
                 }
                 loadSessions();
+            }
+
+            if (data.user_message_id && userTurn) {
+                userTurn.setAttribute('data-message-id', data.user_message_id);
             }
 
             if (data.status === 'llm_error') {
@@ -980,6 +1342,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 
     // Initial Load
+    initCustomScopeDropdown();
     loadSessions();
     loadDocuments();
 });

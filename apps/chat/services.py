@@ -16,8 +16,7 @@ from services.guardrails_service import (
     OUT_OF_CONTEXT_MESSAGE,
     INSUFFICIENT_INFO_MESSAGE,
     NO_DOCUMENTS_MESSAGE,
-    is_out_of_scope_query,
-    is_conversational_follow_up
+    is_out_of_scope_query
 )
 from services.hybrid_retrieval_service import HybridRetrievalService
 from services.reranking_service import RerankingService
@@ -84,11 +83,8 @@ class ChatRAGOrchestrator:
             if target_doc:
                 target_doc_id = str(target_doc.id)
 
-        # 3. Check Conversation History & Follow-Up Context
+        # 3. Check Conversation History
         past_messages = list(session.messages.order_by('created_at'))
-        is_follow_up = bool(past_messages) and is_conversational_follow_up(question)
-
-        last_user_msg = next((m for m in reversed(past_messages) if m.role == 'user'), None)
         last_assistant_msg = next((m for m in reversed(past_messages) if m.role == 'assistant'), None)
 
         conversation_history_str = ""
@@ -99,9 +95,7 @@ class ChatRAGOrchestrator:
                 history_lines.append(f"{role_label}: {msg.message.strip()}")
             conversation_history_str = "\n".join(history_lines)
 
-        search_query = f"{last_user_msg.message} {question}" if (is_follow_up and last_user_msg) else question
-
-        # Retrieve corpus chunks for BM25 sparse search strictly from current user's documents
+        # Retrieve corpus chunks strictly from current user's documents
         chunks_qs = DocumentChunk.objects.filter(document__in=docs_qs)
         if target_doc_id:
             chunks_qs = chunks_qs.filter(document_id=target_doc_id)
@@ -120,14 +114,14 @@ class ChatRAGOrchestrator:
 
         # 4. Hybrid Retrieval (Dense Qdrant + Sparse BM25 + RRF)
         fused_candidates = self.hybrid_retriever.retrieve(
-            query=search_query,
+            query=question,
             corpus_chunks=corpus_chunks,
             document_id=target_doc_id,
             fusion_limit=15
         )
 
-        # If follow-up, ensure any chunks previously cited in last assistant message are present
-        if is_follow_up and last_assistant_msg and last_assistant_msg.citations:
+        # Retain chunks previously cited in conversation so ongoing discussion has context
+        if last_assistant_msg and last_assistant_msg.citations:
             prior_chunk_ids = {c.get("chunk_id") for c in last_assistant_msg.citations if c.get("chunk_id")}
             prior_doc_pages = {(c.get("document_name"), c.get("page_number")) for c in last_assistant_msg.citations}
             existing_ids = {c.get("chunk_id") for c in fused_candidates}
@@ -140,80 +134,28 @@ class ChatRAGOrchestrator:
             if matching_prior:
                 fused_candidates = matching_prior + fused_candidates
 
-        # 5. Question Relevance & Context Sufficiency Check (Pre-Rerank)
-        if not GuardrailsService.check_context_sufficiency(fused_candidates, user_question=question, is_follow_up=is_follow_up):
-            if is_out_of_scope_query(question):
-                insufficient_msg = OUT_OF_CONTEXT_MESSAGE
-                refusal_status = "out_of_scope"
-            else:
-                insufficient_msg = INSUFFICIENT_INFO_MESSAGE
-                refusal_status = "insufficient_context"
-
-            ChatMessage.objects.create(session=session, role='user', message=question)
-            ChatMessage.objects.create(session=session, role='assistant', message=insufficient_msg, citations=[])
-            return {
-                "answer": insufficient_msg,
-                "citations": [],
-                "status": refusal_status
-            }
-
-        # 6. Cross-Encoder Reranking & Score Threshold Validation
+        # 5. Cross-Encoder Reranking
         top_chunks = self.reranker.rerank(
-            query=search_query if is_follow_up else question,
+            query=question,
             candidates=fused_candidates,
             top_k=6
         )
+        if not top_chunks:
+            top_chunks = fused_candidates[:6]
 
-        threshold = getattr(settings, 'RERANK_SCORE_THRESHOLD', -8.5)
-        top_score = top_chunks[0].get('rerank_score', -99) if top_chunks else -99
+        filtered_chunks = top_chunks[:6]
 
-        if top_score < threshold and not is_follow_up:
-            logger.info(f"Top rerank score {top_score:.4f} is below threshold {threshold} for query '{question}'")
-            if is_out_of_scope_query(question):
-                refusal_msg = OUT_OF_CONTEXT_MESSAGE
-                refusal_status = "out_of_scope"
-            else:
-                refusal_msg = INSUFFICIENT_INFO_MESSAGE
-                refusal_status = "insufficient_context"
-
-            ChatMessage.objects.create(session=session, role='user', message=question)
-            ChatMessage.objects.create(session=session, role='assistant', message=refusal_msg, citations=[])
-            return {
-                "answer": refusal_msg,
-                "citations": [],
-                "status": refusal_status
-            }
-
-        # Filter out chunks below relevance threshold
-        filtered_chunks = [c for c in top_chunks if c.get('rerank_score', -99) >= threshold]
-        if not filtered_chunks:
-            filtered_chunks = top_chunks[:2]
-
-        # 7. Specific Evidence Validation
-        q_lower = question.lower()
-        if any(term in q_lower for term in ['blood pressure', 'bp ']):
-            combined_evidence = " ".join(c.get('chunk_text', '') for c in filtered_chunks).lower()
-            if not any(bp_term in combined_evidence for bp_term in ['blood pressure', 'bp', 'mmhg']):
-                insufficient_msg = INSUFFICIENT_INFO_MESSAGE
-                ChatMessage.objects.create(session=session, role='user', message=question)
-                ChatMessage.objects.create(session=session, role='assistant', message=insufficient_msg, citations=[])
-                return {
-                    "answer": insufficient_msg,
-                    "citations": [],
-                    "status": "insufficient_context"
-                }
-
-        # 8. Prepare Citation Identifiers and Structured Context
+        # 6. Prepare Citation Identifiers and Structured Context
         context_str, metadata_str, source_map = CitationService.prepare_citations_context(filtered_chunks)
 
-        # Merge citations from previous assistant turn if follow-up
-        if is_follow_up and last_assistant_msg and last_assistant_msg.citations:
+        # Merge citations from previous assistant turn if available
+        if last_assistant_msg and last_assistant_msg.citations:
             for cit in last_assistant_msg.citations:
                 sid = cit.get("source_id")
                 if sid and sid not in source_map:
                     source_map[sid] = cit
 
-        # 9. Call Gemini API
+        # 7. Call Gemini API directly with query, context, and conversation history
         try:
             raw_answer = self.gemini_service.generate_answer(
                 user_question=question,
@@ -255,7 +197,7 @@ class ChatRAGOrchestrator:
                 "retryable": True
             }
 
-        # 10. Output Guardrails and Citation Validation
+        # 8. Output Guardrails and Citation Validation
         guarded_answer, is_sufficient = GuardrailsService.enforce_output_guardrails(
             raw_output=raw_answer,
             retrieved_chunks=filtered_chunks,
@@ -267,8 +209,8 @@ class ChatRAGOrchestrator:
             source_map=source_map
         )
 
-        # If follow-up reformatting produced an answer without explicit brackets, retain prior citations
-        if is_follow_up and not verified_citations and last_assistant_msg and last_assistant_msg.citations:
+        # If reformatting produced an answer without explicit brackets, retain prior citations
+        if not verified_citations and last_assistant_msg and last_assistant_msg.citations:
             verified_citations = list(last_assistant_msg.citations)
 
         # Persist Messages to Database
@@ -280,7 +222,6 @@ class ChatRAGOrchestrator:
             citations=verified_citations
         )
 
-
         # Automatically update session name if it's the first exchange
         if session.messages.filter(role='user').count() <= 1:
             snippet = question.strip()[:40]
@@ -290,6 +231,6 @@ class ChatRAGOrchestrator:
         return {
             "answer": final_answer,
             "citations": verified_citations,
-            "status": "success",
-            "retrieved_chunk_count": len(top_chunks)
+            "status": "success" if is_sufficient else "insufficient_context",
+            "retrieved_chunk_count": len(filtered_chunks)
         }

@@ -125,3 +125,43 @@ class TestDjangoViews(TestCase):
         data = response.json()
         self.assertIn("Please upload a PDF document", data["answer"])
         self.assertEqual(data["status"], "no_documents")
+
+    @patch('services.gemini_service.GeminiService.generate_answer')
+    def test_edit_chat_question(self, mock_gemini):
+        mock_gemini.return_value = "The patient has hypertension [S1]."
+
+        self.client.force_login(self.user1)
+        # 1. Send initial question
+        resp1 = self.client.post(
+            '/chat/',
+            data=json.dumps({
+                "question": "What is the diagnosis?",
+                "document_id": str(self.doc1.id)
+            }),
+            content_type='application/json'
+        )
+        self.assertEqual(resp1.status_code, 200)
+        data1 = resp1.json()
+        session_id = data1["session_id"]
+        old_user_msg_id = data1["user_message_id"]
+
+        # 2. Send edited question replacing the old one
+        mock_gemini.return_value = "The document recommends daily exercise [S1]."
+        resp2 = self.client.post(
+            '/chat/',
+            data=json.dumps({
+                "question": "What exercise was recommended?",
+                "session_id": session_id,
+                "document_id": str(self.doc1.id),
+                "edit_message_id": old_user_msg_id
+            }),
+            content_type='application/json'
+        )
+        self.assertEqual(resp2.status_code, 200)
+        data2 = resp2.json()
+        self.assertIn("daily exercise", data2["answer"])
+        self.assertNotEqual(data2["user_message_id"], old_user_msg_id)
+        # Verify old message was deleted from session
+        session = ChatSession.objects.get(id=session_id)
+        self.assertFalse(session.messages.filter(id=old_user_msg_id).exists())
+
